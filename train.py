@@ -158,6 +158,9 @@ def setup_training_loop_kwargs(
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025, gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025, gamma=0.01, ema=500, ramp=0.05, map=2),
+        ## TODO: Add 'ViT-D'
+        'vit-d':     dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8,
+                          patch_size=8, extend_size=2, dim=384, blocks=6, num_heads=6, dim_head=None, dropout=0.1),
     }
 
     assert cfg in cfg_specs
@@ -175,6 +178,9 @@ def setup_training_loop_kwargs(
 
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    ## TODO: Change class_name to training.networks.ViTDiscriminator
+    if cfg == 'vit-d':
+        args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.ViTDiscriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
@@ -191,6 +197,19 @@ def setup_training_loop_kwargs(
     args.batch_gpu = spec.mb // spec.ref_gpus
     args.ema_kimg = spec.ema
     args.ema_rampup = spec.ramp
+
+    # TODO:
+    # Add cfg == 'ViT-D'
+    # args.D_kwargs.architecture = 'ViT-D'
+    # args.D_kwargs.[options for ViT-D]
+    if cfg ==  'vit-d':
+        args.D_kwargs.patch_size = spec.patch_size
+        args.D_kwargs.extend_size = spec.extend_size
+        args.D_kwargs.dim = spec.dim
+        args.D_kwargs.blocks = spec.blocks
+        args.D_kwargs.num_heads = spec.num_heads
+        args.D_kwargs.dim_head = spec.dim_head
+        args.D_kwargs.dropout = spec.dropout
 
     if cfg == 'cifar':
         args.loss_kwargs.pl_weight = 0 # disable path length regularization
@@ -413,7 +432,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
 
 # Base config.
-@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar']))
+@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'vit-d'])) #TODO: add vit-d option for --cfg
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')

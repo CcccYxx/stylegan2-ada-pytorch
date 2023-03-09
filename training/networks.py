@@ -8,6 +8,8 @@
 
 import numpy as np
 import torch
+import torch.nn as nn
+from einops import rearrange, repeat
 from torch_utils import misc
 from torch_utils import persistence
 from torch_utils.ops import conv2d_resample
@@ -727,3 +729,190 @@ class Discriminator(torch.nn.Module):
         return x
 
 #----------------------------------------------------------------------------
+# ViT-Discriminator Ref: https://github.com/wilile26811249/ViTGAN.git
+
+@persistence.persistent_class
+class MLP(nn.Module):
+    def __init__(self, in_feat, hid_feat = None, out_feat = None, dropout = 0.):
+        super().__init__()
+        if not hid_feat:
+            hid_feat = in_feat
+        if not out_feat:
+            out_feat = in_feat
+        self.linear1 = nn.Linear(in_feat, hid_feat)
+        self.activation = nn.GELU()
+        self.linear2 = nn.Linear(hid_feat, out_feat)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return self.dropout(x)
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class
+class Attention(nn.Module):
+    """
+    Implement multi head self attention layer using the "Einstein summation convention".
+    Parameters
+    ----------
+    dim:
+        Token's dimension, EX: word embedding vector size
+    num_heads:
+        The number of distinct representations to learn
+    dim_head:
+        The dimension of the each head
+    discriminator:
+        Used in discriminator or not.
+    """
+    def __init__(self, dim, num_heads = 4, dim_head = None, discriminator = False):
+        super().__init__()
+        self.num_heads = num_heads
+        self.dim_head = int(dim / num_heads) if dim_head is None else dim_head
+        self.weight_dim = self.num_heads * self.dim_head
+        self.to_qkv = nn.Linear(dim, self.weight_dim * 3, bias = False)
+        self.scale_factor = dim ** -0.5
+        self.discriminator = discriminator
+        self.w_out = nn.Linear(self.weight_dim, dim, bias = True)
+
+        if discriminator:
+            u, s, v = torch.svd(self.to_qkv.weight.detach())
+            self.init_spect_norm = torch.max(s)
+
+    def forward(self, x):
+        assert x.dim() == 3
+
+        if self.discriminator:
+            u, s, v = torch.svd(self.to_qkv.weight.detach())
+            self.to_qkv.weight = torch.nn.Parameter(self.to_qkv.weight.detach() * self.init_spect_norm / torch.max(s))
+
+        # Generate the q, k, v vectors
+        qkv = self.to_qkv(x)
+        q, k, v = tuple(rearrange(qkv, 'b t (d k h) -> k b h t d', k = 3, h = self.num_heads))
+
+        # Enforcing Lipschitzness of Transformer Discriminator
+        # Due to Lipschitz constant of standard dot product self-attention
+        # layer can be unbounded, so adopt the l2 attention replace the dot product.
+        if self.discriminator:
+            attn = torch.cdist(q, k, p = 2)
+        else:
+            attn = torch.einsum("... i d, ... j d -> ... i j", q, k)
+        scale_attn = attn * self.scale_factor
+        scale_attn_score = torch.softmax(scale_attn, dim = -1)
+        result = torch.einsum("... i j, ... j d -> ... i d", scale_attn_score, v)
+
+        # re-compose
+        result = rearrange(result, "b h t d -> b t (h d)")
+        return self.w_out(result)
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class      
+class DEncoderBlock(nn.Module):
+    def __init__(self, dim, num_heads = 4, dim_head = None,
+        dropout = 0., mlp_ratio = 4):
+        super().__init__()
+        self.attn = Attention(dim, num_heads, dim_head, discriminator = True)
+        self.dropout = nn.Dropout(dropout)
+
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+
+        self.mlp = MLP(dim, dim * mlp_ratio, dropout = dropout)
+
+    def forward(self, x):
+        x1 = self.norm1(x)
+        x = x + self.dropout(self.attn(x1))
+        x2 = self.norm2(x)
+        x = x + self.mlp(x2)
+        return x
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class  
+class DTransformerEncoder(nn.Module):
+    def __init__(self,
+        dim,
+        blocks = 6,
+        num_heads = 8,
+        dim_head = None,
+        dropout = 0
+    ):
+        super().__init__()
+        self.blocks = nn.ModuleList([])
+        for _ in range(blocks):
+            self.blocks.append(DEncoderBlock(dim, num_heads, dim_head, dropout))
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class  
+class ViTDiscriminator(nn.Module):
+    def __init__(self,
+        c_dim,                          # Conditioning label (C) dimensionality.
+        img_resolution,                 # Input resolution.
+        img_channels,                   # Number of input color channels.
+        architecture        = 'resnet', # Architecture: 'orig', 'skip', 'resnet'.
+        channel_base        = 32768,    # Overall multiplier for the number of channels.
+        channel_max         = 512,      # Maximum number of channels in any layer.
+        num_fp16_res        = 0,        # Use FP16 for the N highest resolutions.
+        conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
+        cmap_dim            = None,     # Dimensionality of mapped conditioning label, None = default.
+        block_kwargs        = {},       # Arguments for DiscriminatorBlock.
+        mapping_kwargs      = {},       # Arguments for MappingNetwork.
+        epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
+        #-----------------------------------------------------------------------------------------------------
+        patch_size = 8,
+        extend_size = 2,
+        dim = 384,
+        blocks = 6,
+        num_heads = 6,
+        dim_head = None,
+        dropout = 0
+    ):
+        super().__init__()
+        self.patch_size = patch_size + 2 * extend_size
+        self.token_dim = img_channels * (self.patch_size ** 2)
+        self.project_patches = nn.Linear(self.token_dim, dim)
+
+        self.emb_dropout = nn.Dropout(dropout)
+
+        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
+        self.pos_emb1D = nn.Parameter(torch.randn(self.token_dim + 1, dim))
+        self.mlp_head = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, 1)
+        )
+
+        self.Transformer_Encoder = DTransformerEncoder(dim, blocks, num_heads, dim_head, dropout)
+
+    def forward(self, img, c, **block_kwargs):
+        # Generate overlappimg image patches
+        stride_h = (img.shape[2] - self.patch_size) // 8 + 1
+        stride_w = (img.shape[3] - self.patch_size) // 8 + 1
+        img_patches = img.unfold(2, self.patch_size, stride_h).unfold(3, self.patch_size, stride_w)
+        img_patches = img_patches.contiguous().view(
+            img_patches.shape[0], img_patches.shape[2] * img_patches.shape[3], img_patches.shape[1] * img_patches.shape[4] * img_patches.shape[5]
+        )
+        img_patches = self.project_patches(img_patches)
+        batch_size, tokens, _ = img_patches.shape
+
+        # Prepend the classifier token
+        cls_token = repeat(self.cls_token, '() n d -> b n d', b = batch_size)
+        img_patches = torch.cat((cls_token, img_patches), dim = 1)
+
+        # Plus the positional embedding
+        img_patches = img_patches + self.pos_emb1D[: tokens + 1, :]
+        img_patches = self.emb_dropout(img_patches)
+
+        result = self.Transformer_Encoder(img_patches)
+        logits = self.mlp_head(result[:, 0, :])
+        #logits = nn.Sigmoid()(logits)
+        return logits
