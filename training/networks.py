@@ -786,8 +786,8 @@ class Attention(nn.Module):
         assert x.dim() == 3
 
         if self.discriminator:
-            u, s, v = torch.svd(self.to_qkv.weight.detach())
-            self.to_qkv.weight = torch.nn.Parameter(self.to_qkv.weight.detach() * self.init_spect_norm / torch.max(s))
+            u, s, v = torch.svd(self.to_qkv.weight)
+            self.to_qkv.weight = torch.nn.Parameter(self.to_qkv.weight * self.init_spect_norm / torch.max(s))
 
         # Generate the q, k, v vectors
         qkv = self.to_qkv(x)
@@ -878,14 +878,18 @@ class ViTDiscriminator(nn.Module):
         dropout = 0
     ):
         super().__init__()
+        self.img_resolution = img_resolution
+        self.img_channels = img_channels
+        self.stride = patch_size
         self.patch_size = patch_size + 2 * extend_size
+        self.patch_num = ((self.img_resolution - self.patch_size) // self.stride + 1)**2 
         self.token_dim = img_channels * (self.patch_size ** 2)
         self.project_patches = nn.Linear(self.token_dim, dim)
 
         self.emb_dropout = nn.Dropout(dropout)
 
         self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.pos_emb1D = nn.Parameter(torch.randn(self.token_dim + 1, dim))
+        self.pos_emb1D = nn.Parameter(torch.randn(self.patch_num + 1, dim))
         self.mlp_head = nn.Sequential(
             nn.LayerNorm(dim),
             nn.Linear(dim, 1)
@@ -895,9 +899,9 @@ class ViTDiscriminator(nn.Module):
 
     def forward(self, img, c, **block_kwargs):
         # Generate overlappimg image patches
-        stride_h = (img.shape[2] - self.patch_size) // 8 + 1
-        stride_w = (img.shape[3] - self.patch_size) // 8 + 1
-        img_patches = img.unfold(2, self.patch_size, stride_h).unfold(3, self.patch_size, stride_w)
+        #stride_h = (self.img_resolution - self.patch_size) // 8 + 1
+        #stride_w = (self.img_resolution - self.patch_size) // 8 + 1
+        img_patches = img.unfold(2, self.patch_size, self.stride).unfold(3, self.patch_size, self.stride)
         img_patches = img_patches.contiguous().view(
             img_patches.shape[0], img_patches.shape[2] * img_patches.shape[3], img_patches.shape[1] * img_patches.shape[4] * img_patches.shape[5]
         )
@@ -913,6 +917,6 @@ class ViTDiscriminator(nn.Module):
         img_patches = self.emb_dropout(img_patches)
 
         result = self.Transformer_Encoder(img_patches)
-        logits = self.mlp_head(result[:, 0, :])
+        logits = self.mlp_head(result[:, 0, :]) 
         #logits = nn.Sigmoid()(logits)
         return logits
