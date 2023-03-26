@@ -880,7 +880,7 @@ class ViTDiscriminator(nn.Module):
         super().__init__()
         self.img_resolution = img_resolution
         self.img_channels = img_channels
-        self.stride = patch_size
+        self.stride = patch_size + extend_size
         self.patch_size = patch_size + 2 * extend_size
         self.patch_num = ((self.img_resolution - self.patch_size) // self.stride + 1)**2 
         self.token_dim = img_channels * (self.patch_size ** 2)

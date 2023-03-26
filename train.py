@@ -161,8 +161,8 @@ def setup_training_loop_kwargs(
         ## TODO: Add 'ViT-D'
         'vit-d':     dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8,
                           patch_size=16, extend_size=4, dim=432, blocks=10, num_heads=6, dim_head=None, dropout=0.01), 
-        'vit-d-2':   dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.002, gamma=1,    ema=20,  ramp=None, map=8,
-                          patch_size=8, extend_size=2, dim=384, blocks=12, num_heads=6, dim_head=None, dropout=0.01),
+        'vit-d-2':   dict(ref_gpus=1,  kimg=25000,  mb=8, mbstd=4,  fmaps=0.5, lrate=0.0002, gamma=1,    ema=20,  ramp=None, map=8,
+                          patch_size=8, extend_size=2, dim=384, blocks=6, num_heads=6, dim_head=None, dropout=0.01),
     }
 
     assert cfg in cfg_specs
