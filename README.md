@@ -1,3 +1,6 @@
+# This is a modified version of StyleGAN2-ADA for UCLA CS188 Course Project
+Newly added config for training: `vit-d-2`: using ViT for the discriminator
+The detailed model hyperparameter can be found in the file `train.py`
 ## StyleGAN2-ADA &mdash; Official PyTorch implementation
 
 ![Teaser image](./docs/stylegan2-ada-teaser-1024x252.png)
