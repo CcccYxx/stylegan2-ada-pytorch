@@ -159,10 +159,10 @@ def setup_training_loop_kwargs(
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,  gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025, gamma=0.01, ema=500, ramp=0.05, map=2),
         ## TODO: Add 'ViT-D'
-        'vit-d':     dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.0025, gamma=1,    ema=20,  ramp=None, map=8,
-                          patch_size=16, extend_size=4, dim=432, blocks=10, num_heads=6, dim_head=None, dropout=0.01), 
-        'vit-d-2':   dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.002, gamma=1,    ema=20,  ramp=None, map=8,
-                          patch_size=8, extend_size=2, dim=384, blocks=12, num_heads=6, dim_head=None, dropout=0.01),
+        'vit-d':     dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=0.5, lrate=0.0002, gamma=1,    ema=20,  ramp=0.05, map=8,
+                          patch_size=16, extend_size=4, dim=432, blocks=6, num_heads=6, dim_head=None, dropout=0.01), 
+        'vit-d-2':   dict(ref_gpus=1,  kimg=25000,  mb=8, mbstd=8,  fmaps=0.5, glrate=0.0002, dlrate=0.0002,  gamma=1,    ema=20,  ramp=None, map=8,
+                          patch_size=8, extend_size=2, dim=384, blocks=6, num_heads=6, dim_head=None, dropout=0.0), # Different lr for G D 
     }
 
     assert cfg in cfg_specs
@@ -189,9 +189,13 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
-
-    args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+    
+    if cfg == 'vit-d-2':
+        args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.glrate, betas=[0,0.99], eps=1e-8)
+        args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.dlrate, betas=[0,0.99], eps=1e-8)
+    else:
+        args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
+        args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
 
     args.total_kimg = spec.kimg
